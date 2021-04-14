@@ -1,0 +1,224 @@
+; TEST RIG --------------------------------------
+
+(define (assert= input expected)
+  (if (equal? expected input)
+      0
+      (list 'Fail: 'Expected: expected 'actual: input)))
+
+(define (assert!= input expected)
+  (if (not (equal? expected input))
+      0
+       (list 'Fail: 'Expected: expected 'actual: input)))
+
+; END TEST RIG ----------------------------------
+
+; START Q1 --------------------------------------
+
+(define (test-expand-where)
+  (list
+   (assert= (expand-where '(val (sqrt (+ x y)) where x 3 y 6)) '(let ((x 3) (y 6)) (sqrt (+ x y))))
+   (assert= (expand-where '(val (sqrt (+ x y z)) where x 2 y 3 z 4)) '(let ((x 2) (y 3) (z 4)) (sqrt (+ x y z))))
+   (assert= (expand-where '(value (sqrt (+ x y z)) where x 2 y 3 z 4)) #f)
+   (assert= (expand-where '(val ((* x y z)) where x 2 y 3 z 4)) '(let ((x 2) (y 3) (z 4)) ((* x y z))))
+   (assert= (expand-where '(val ((/ x y z)) where x 2 y 3 z 4)) '(let ((x 2) (y 3) (z 4)) ((/ x y z))))
+   (assert= (expand-where '(val (sqrt (+ v x y z)) where v 1 x 2 y 3 z 4)) '(let ((v 1) (x 2) (y 3) (z 4)) (sqrt (+ v x y z))))
+   (assert!= (expand-where '(val (sqrt (+ x y)) where x 3 y 6)) '(let ((x 3) (y 6)) (sqrt (- x y))))))
+
+(define where-part
+  (lambda (expr)
+    (if (null? expr)
+        '() ; fail case
+        (if (equal? (car expr) 'where)
+            (cdr expr) ; found case
+            (where-part (cdr expr)))))) ; induction case
+
+(define extract-where-exp
+  (lambda (expr)
+    (if (null? expr)
+        '() ; base case
+        (if (and (symbol? (car expr))
+                 (not (null? (cadr expr))))
+            (cons (list (car expr) (cadr expr))
+                  (extract-where-exp (cdr expr)))
+            (extract-where-exp (cdr expr))))))
+  
+(define expand-where
+  (lambda (expr)
+    (if (and (equal? (car expr) 'val)
+             (not (null? (cadr expr)))) ; format check
+        (list 'let (extract-where-exp (where-part expr)) (cadr expr))
+        #f)))
+                                           
+; END Q1 ----------------------------------------
+
+; START Q2 --------------------------------------
+
+(define (test-subseq-locs)
+  (list
+   (assert= (subseq-locs '(1 2 1 2 1 2) '(1 2)) '(0 2 4))
+   (assert= (subseq-locs '(1 2 1 2 1 2 4 5 3) '(1 2)) '(0 2 4))
+   (assert= (subseq-locs '(a b c c b a a a a) '(a b c)) '(0))
+   (assert= (subseq-locs '(a b c c b a a a a) '(a b d)) '())
+   (assert!= (subseq-locs '(a b c c b a a a a) '(a b d)) '(0))
+   (assert= (subseq-locs '(1 2 1 2 1 2) '(1 2)) '(0 2 4))))
+
+(define (subseq-locs list1 list2)
+  (define (check-all list1 list2 i)
+    (if (null? list1)
+        '() ; base case
+        (if (check-once list1 list2)
+            (cons i (check-all (cdr list1) list2 (+ i 1))) ; store index & continue
+            (check-all (cdr list1) list2 (+ i 1))))) ; continue
+  (check-all list1 list2 0)) ;bind 0 as start index
+         
+(define (check-once list1 list2)
+  (cond
+    ((null? list2) #t) ; base case
+    ((null? list1) #f) ; list hit the end & input not consumed
+    ((equal? (car list1) (car list2))
+     (check-once (cdr list1) (cdr list2))) ; induction case
+    (else #f)))
+
+; END Q2 --------------------------------------
+
+; START Q3 -------------------------------------
+
+(define val
+  (lambda (x) x))
+
+(define (test-fib)
+  (list
+   (assert= (fib 1 val) (val 1))
+   (assert= (fib 10 val) (val 89))
+   (assert= (fib 8 val) (val 34))
+   (assert= (fib 5 val) (val 8))))
+
+(define fib
+  (lambda (n k)
+    (cond
+      ((= n 0) (k 1))
+      ((= n 1) (k 1))
+      (else (fib (- n 1)
+                 (lambda (x)
+                   (fib (- n 2)
+                        (lambda (y)
+                          (k (+ x y))))))))))
+
+; END Q3 --------------------------------------
+
+; START Q4 ------------------------------------
+
+(define (test-ddx)
+  (list
+   (assert= (ddx '(+ 3 x)) 1)
+   (assert= (ddx '(* 2 4)) 0)
+   (assert= (ddx '(+ 10 x)) 1)))
+
+(define (simplifier e)
+  (if (list? e)
+      (let ((sign  (car e))
+            (op1 (simplifier (cadr e)))  
+            (op2 (simplifier (caddr e))))    
+        (cond
+          ((equal? sign '+)
+           (cond
+             ((and (number? op1) (number? op2) (+ op1 op2))) ; e.g (+ 1 2)
+             (else (list sign op1 op2))))
+          ((equal? sign '*)
+           (cond
+             ((and (number? op1) (number? op2) (* op1 op2))) ; e.g (* 1 2)
+             (else (list sign op1 op2))))
+          (else (list sign op1 op2))))
+      e))
+
+(define op-table
+  (list (list 'exp exp (lambda (u du) (list '* du (list 'exp u))))
+        (list 'sin sin (lambda (u du) (list '* du (list 'cos u))))
+        (list 'cos cos (lambda (u du)
+                         (list '* du (list '* -1 (list 'sin u)))))
+        (list 'negate (lambda (x) (* x -1)) (lambda (u du) (list 'negate du)))
+        (list '+ (lambda (x y) (+ x y))
+              (lambda (u v du dv) (list '+ du dv)))
+        (list '* (lambda (x y) (* x y))
+              (lambda (u v du dv)
+                (list '+ (list '* u dv) (list '* du v))))))
+
+(define lookup-op
+  (lambda (op) (cadr (assoc op op-table))))
+
+(define lookup-deriv-calc
+  (lambda (op) (caddr (assoc op op-table))))
+
+(define ddx
+  (lambda (e)
+    (cond ((equal? e 'x) 1)		; (d/dx)x = 1
+          ((number? e) 0)		; (d/dx)c = 0
+          (else
+           (let ((op (car e))
+                 (args (cdr e)))
+             (simplifier (apply (lookup-deriv-calc op)
+                                (append args
+                                        (map ddx args)))))))))
+
+; END Q4 --------------------------------------
+
+
+; START Q5 -------------------------------------
+
+; 5.1 ------------------------------------------
+
+(define (test-iterate)
+  (list
+   (assert= (iterate sqrt 16 3) 1.4142135623730951)
+   (assert= (iterate cdr '(a b c d e f g) 3) '(d e f g))
+   (assert= (iterate cdr '(a b c) 3) '())
+   (assert= (iterate (lambda(x) (+ x 1)) 16 3) 19)))
+
+(define (iterate f x0 i)
+  (if (equal? i 1)
+      (f x0) ; base case
+      (iterate f (f x0) (- i 1)))) ; induction case
+
+;5.2 -------------------------------------------
+
+(define (test-find-iter)
+  (list
+   (assert= (find-iter sqrt 16 1.4142135623730951 100) 3)
+   (assert= (find-iter cdr '(a b c) '() 50) 3)
+   (assert= (find-iter (lambda(x) (+ x 1)) 16 19 50) 3)
+   (assert= (find-iter (lambda(x) (+ x 1)) 16 19 2) #f)
+   (assert= (find-iter cdr '(a b c d e f g) '(f g) 100) 5)))
+
+(define (find-iter f x0 x m)
+  (define (get-i f x0 x m i)
+    (if (equal? i m)
+        #f ; fail case
+        (if (equal? (iterate f x0 i) x)
+            i ; success case
+            (get-i f x0 x m (+ i 1))))) ; induction case
+  (get-i f x0 x m 1))
+
+;5.3 -------------------------------------------
+
+(define (test-find-iter2)
+  (list
+   (assert= (find-iter2 cdr '(a b c d d d e f) 8 (lambda (xs) (cons 'd xs)) '(e f) 20) '(3 3))))
+
+(define (find-iter2 f x0 mf g y0 mg)
+  (define (get-i f x0 mf g y0 mg i)
+    (if (equal? i mf)
+        #f ; fail case
+        (if (verify f x0 mf g y0 mg i 1)
+            (list i (verify f x0 mf g y0 mg i 1))
+            (get-i f x0 mf g y0 mg (+ i 1)))))
+  (get-i f x0 mf g y0 mg 1))
+
+(define (verify f x0 mf g y0 mg i j)
+  (if (equal? j mg)
+      #f
+      (if (equal? (iterate f x0 i) (iterate g y0 j))
+          j
+          (verify f x0 mf g y0 mg i (+ j 1)))))
+
+; END Q5 --------------------------------------       
+            
